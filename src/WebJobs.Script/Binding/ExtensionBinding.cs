@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using Microsoft.Azure.WebJobs.Script.Description;
 using Microsoft.Azure.WebJobs.Script.Extensibility;
 using Newtonsoft.Json.Linq;
+using Newtonsoft.Json;
 
 namespace Microsoft.Azure.WebJobs.Script.Binding
 {
@@ -69,6 +70,12 @@ namespace Microsoft.Azure.WebJobs.Script.Binding
                 {
                     context.Value = result;
                 }
+            }
+            else if (_binding.DefaultType == typeof(JArray))
+            {
+                JArray entityArray = await context.Binder.BindAsync<JArray>(_attributes.ToArray());
+                string json = entityArray.ToString(Formatting.None);
+                context.Value = json;
             }
             else
             {
