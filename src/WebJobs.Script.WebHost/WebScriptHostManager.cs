@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -61,7 +60,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                 config.TraceWriter = systemTraceWriter;
             }
 
-            _secretManager = secretManagerFactory.Create(settingsManager, config.TraceWriter, webHostSettings.SecretsPath);
+            _secretManager = secretManagerFactory.Create(settingsManager, config.TraceWriter, new FileSystemSecretsRepository(webHostSettings.SecretsPath));
         }
 
         public WebScriptHostManager(ScriptHostConfiguration config, ISecretManagerFactory secretManagerFactory, ScriptSettingsManager settingsManager, WebHostSettings webHostSettings)
@@ -142,7 +141,12 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                     {
                         if (!_webHostSettings.IsSelfHost)
                         {
+                            // FIXME: Mono does not yet support HostingEnvironment.QueueBackgroundWorkItem
+#if MONO
+                            Task.Run(() => WarmUp(_webHostSettings));
+#else
                             HostingEnvironment.QueueBackgroundWorkItem((ct) => WarmUp(_webHostSettings));
+#endif
                         }
                         else
                         {
@@ -156,7 +160,12 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                 {
                     if (!_webHostSettings.IsSelfHost)
                     {
+                        // FIXME: This behaves a little differently on Mono as it does not handle cancellation
+#if MONO
+                        Task.Run(() => RunAndBlock());
+#else
                         HostingEnvironment.QueueBackgroundWorkItem((ct) => RunAndBlock(ct));
+#endif
                     }
                     else
                     {
@@ -215,7 +224,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                 config.HostConfig.StorageConnectionString = null;
                 config.HostConfig.DashboardConnectionString = null;
 
-                host = ScriptHost.Create(ScriptSettingsManager.Instance, config);
+                host = ScriptHost.Create(new NullScriptHostEnvironment(), config, ScriptSettingsManager.Instance);
                 traceWriter.Info(string.Format("Starting Host (Id={0})", host.ScriptConfig.HostConfig.HostId));
 
                 host.Start();
@@ -396,7 +405,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
         protected override void OnHostStarted()
         {
             // Purge any old Function secrets
-            _secretManager.PurgeOldFiles(Instance.ScriptConfig.RootScriptPath, Instance.TraceWriter);
+            _secretManager.PurgeOldSecretsAsync(Instance.ScriptConfig.RootScriptPath, Instance.TraceWriter);
 
             base.OnHostStarted();
         }
@@ -422,6 +431,14 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                     }
                 }
             }
+        }
+
+        public override void Shutdown()
+        {
+            Instance?.TraceWriter.Info("Environment shutdown has been triggered. Stopping host and signaling shutdown.");
+
+            Stop();
+            HostingEnvironment.InitiateShutdown();
         }
     }
 }

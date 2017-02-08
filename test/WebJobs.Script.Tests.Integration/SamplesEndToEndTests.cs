@@ -279,6 +279,20 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
         }
 
         [Fact]
+        public async Task HttpTrigger_DuplicateQueryParams_Succeeds()
+        {
+            string uri = "api/httptrigger?code=hyexydhln844f2mb7hgsup2yf8dowlb0885mbiq1&name=Mathew&name=Amy";
+            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/plain"));
+
+            HttpResponseMessage response = await this._fixture.HttpClient.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            string body = await response.Content.ReadAsStringAsync();
+            Assert.Equal("text/plain", response.Content.Headers.ContentType.MediaType);
+            Assert.Equal("Hello Amy", body);
+        }
+
+        [Fact]
         public async Task HttpTrigger_CustomRoute_Get_ReturnsExpectedResponse()
         {
             TestHelpers.ClearFunctionLogs("HttpTrigger-CustomRoute-Get");
@@ -600,6 +614,26 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
         }
 
         [Fact]
+        public async Task GenericWebHook_Post_NamedKey_Headers_Succeeds()
+        {
+            // Authenticate using values specified via headers,
+            // rather than URI query params
+            string uri = "api/webhook-generic";
+            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, uri);
+            request.Headers.Add("x-functions-key", "1388a6b0d05eca2237f10e4a4641260b0a08f3a6");
+            request.Headers.Add("x-functions-clientid", "testclient");
+            request.Content = new StringContent("{ 'value': 'Foobar' }");
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+
+            HttpResponseMessage response = await this._fixture.HttpClient.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("application/json", response.Content.Headers.ContentType.MediaType);
+            string body = await response.Content.ReadAsStringAsync();
+            JObject jsonObject = JObject.Parse(body);
+            Assert.Equal("Value: Foobar", jsonObject["result"]);
+        }
+
+        [Fact]
         public async Task GenericWebHook_Post_NamedKeyInHeader_Succeeds()
         {
             // Authenticate using a named key (client id)
@@ -908,6 +942,25 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
 
             node = doc.Descendants(XName.Get("Errors", ns)).Single();
             Assert.True(node.IsEmpty);
+        }
+
+        [Fact]
+        public async Task HostStatus_FunctionLevelRequest_Fails()
+        {
+            string uri = "admin/host/status";
+            var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Add("x-functions-key", "zlnu496ve212kk1p84ncrtdvmtpembduqp25ajjc");
+            var response = await this._fixture.HttpClient.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        }
+
+        [Fact]
+        public async Task HostStatus_AnonymousLevelRequest_Fails()
+        {
+            string uri = "admin/host/status";
+            var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            var response = await this._fixture.HttpClient.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         }
 
         private async Task<HttpResponseMessage> GetHostStatusAsync()

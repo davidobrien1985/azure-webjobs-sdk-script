@@ -1,6 +1,8 @@
 ﻿// Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the MIT License. See License.txt in the project root for license information.
 
+using System.Collections.Immutable;
+
 namespace Microsoft.Azure.WebJobs.Script
 {
     public static class ScriptConstants
@@ -18,6 +20,7 @@ namespace Microsoft.Azure.WebJobs.Script
         public const string TracePropertyIsSystemTraceKey = "MS_IsSystemTrace";
 
         public const string TraceSourceSecretManagement = "SecretManagement";
+        public const string TraceSourceFileWatcher = "FileWatcher";
 
         // Define all system parameters we inject with a prefix to avoid collisions
         // with user parameters
@@ -34,5 +37,11 @@ namespace Microsoft.Azure.WebJobs.Script
         public const string DefaultHttpRoutePrefix = "api";
         public const string DefaultMasterKeyName = "master";
         public const string DefaultFunctionKeyName = "default";
+
+        public const string DynamicSku = "Dynamic";
+
+        public const string FeatureFlagDisableShadowCopy = "DisableShadowCopy";
+
+        public static readonly ImmutableArray<string> AssemblyFileTypes = ImmutableArray.Create(".dll", ".exe");
     }
 }

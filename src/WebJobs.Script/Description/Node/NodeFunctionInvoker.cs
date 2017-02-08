@@ -42,9 +42,9 @@ namespace Microsoft.Azure.WebJobs.Script.Description
         static NodeFunctionInvoker()
         {
             // node cwd is edge nuget package (double_edge.js)
-            _functionTemplate = @"return require('../Content/Script/functions.js').createFunction(require('{0}'));";
-            _clearRequireCacheScript = @"return require('../Content/Script/functions.js').clearRequireCache;";
-            _globalInitializationScript = @"return require('../Content/Script/functions.js').globalInitialization;";
+            _functionTemplate = @"return require('../azurefunctions/functions.js').createFunction(require('{0}'));";
+            _clearRequireCacheScript = @"return require('../azurefunctions/functions.js').clearRequireCache;";
+            _globalInitializationScript = @"return require('../azurefunctions/functions.js').globalInitialization;";
         }
 
         internal NodeFunctionInvoker(ScriptHost host, BindingMetadata trigger, FunctionMetadata functionMetadata,
@@ -434,7 +434,7 @@ namespace Microsoft.Azure.WebJobs.Script.Description
             Dictionary<string, object> requestObject = new Dictionary<string, object>();
             requestObject["originalUrl"] = request.RequestUri.ToString();
             requestObject["method"] = request.Method.ToString().ToUpperInvariant();
-            requestObject["query"] = request.GetQueryNameValuePairs().ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+            requestObject["query"] = request.GetQueryParameterDictionary();
 
             // since HTTP headers are case insensitive, we lower-case the keys
             // as does Node.js request object

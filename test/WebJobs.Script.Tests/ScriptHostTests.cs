@@ -4,8 +4,10 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Configuration;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Abstractions.TestingHelpers;
 using System.Linq;
 using System.Net.Http;
 using System.Reflection;
@@ -39,6 +41,19 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
         public static void GetRelativeDirectory_ReturnsExpectedDirectoryName(string path, string expected)
         {
             Assert.Equal(expected, ScriptHost.GetRelativeDirectory(path, @"C:\Functions\Scripts"));
+        }
+
+        [Fact]
+        public void ReadFunctionMetadata_Succeeds()
+        {
+            var config = new ScriptHostConfiguration
+            {
+                RootScriptPath = Path.Combine(Environment.CurrentDirectory, @"..\..\..\..\sample")
+            };
+            var traceWriter = new TestTraceWriter(TraceLevel.Verbose);
+            var functionErrors = new Dictionary<string, Collection<string>>();
+            var metadata = ScriptHost.ReadFunctionMetadata(config, traceWriter, functionErrors);
+            Assert.Equal(49, metadata.Count);
         }
 
         [Fact]
@@ -176,14 +191,40 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             {
                 { "scriptFile", scriptFileName }
             };
-            string[] functionFiles = new string[]
+
+            var files = new Dictionary<string, MockFileData>
             {
-                @"c:\functions\queueTrigger.py",
-                @"c:\functions\helper.py",
-                @"c:\functions\test.txt"
+                { @"c:\functions\queueTrigger.py", new MockFileData(string.Empty) },
+                { @"c:\functions\helper.py", new MockFileData(string.Empty) },
+                { @"c:\functions\test.txt", new MockFileData(string.Empty) }
             };
-            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, functionFiles);
-            Assert.Equal(@"c:\functions\queueTrigger.py", scriptFile);
+
+            var fileSystem = new MockFileSystem(files);
+
+            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, @"c:\functions", fileSystem);
+            Assert.Equal(@"c:\functions\queueTrigger.py", scriptFile, StringComparer.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void DeterminePrimaryScriptFile_RelativeSourceFileSpecified()
+        {
+            JObject functionConfig = new JObject()
+            {
+                { "scriptFile", @"..\shared\queuetrigger.py" }
+            };
+
+            var files = new Dictionary<string, MockFileData>
+            {
+                { @"c:\shared\queueTrigger.py", new MockFileData(string.Empty) },
+                { @"c:\functions\queueTrigger.py", new MockFileData(string.Empty) },
+                { @"c:\functions\helper.py", new MockFileData(string.Empty) },
+                { @"c:\functions\test.txt", new MockFileData(string.Empty) }
+            };
+
+            var fileSystem = new MockFileSystem(files);
+
+            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, @"c:\functions", fileSystem);
+            Assert.Equal(@"c:\shared\queueTrigger.py", scriptFile, StringComparer.OrdinalIgnoreCase);
         }
 
         [Fact]
@@ -193,89 +234,98 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             {
                 { "scriptFile", "queueTrigger.py" }
             };
-            string[] functionFiles = new string[]
+            var files = new Dictionary<string, MockFileData>
             {
-                @"c:\functions\run.py",
-                @"c:\functions\queueTrigger.py",
-                @"c:\functions\helper.py",
-                @"c:\functions\test.txt"
+                { @"c:\functions\run.py", new MockFileData(string.Empty) },
+                { @"c:\functions\queueTrigger.py", new MockFileData(string.Empty) },
+                { @"c:\functions\helper.py", new MockFileData(string.Empty) },
+                { @"c:\functions\test.txt", new MockFileData(string.Empty) }
             };
-            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, functionFiles);
+            var fileSystem = new MockFileSystem(files);
+
+            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, @"c:\functions", fileSystem);
             Assert.Equal(@"c:\functions\queueTrigger.py", scriptFile);
         }
 
         [Fact]
         public void DeterminePrimaryScriptFile_MultipleFiles_NoClearPrimary_ReturnsNull()
         {
-            JObject functionConfig = new JObject();
-            string[] functionFiles = new string[]
+            var functionConfig = new JObject();
+            var files = new Dictionary<string, MockFileData>
             {
-                @"c:\functions\foo.py",
-                @"c:\functions\queueTrigger.py",
-                @"c:\functions\helper.py",
-                @"c:\functions\test.txt"
+                { @"c:\functions\foo.py", new MockFileData(string.Empty) },
+                { @"c:\functions\queueTrigger.py", new MockFileData(string.Empty) },
+                { @"c:\functions\helper.py", new MockFileData(string.Empty) },
+                { @"c:\functions\test.txt", new MockFileData(string.Empty) }
             };
-            Assert.Null(ScriptHost.DeterminePrimaryScriptFile(functionConfig, functionFiles));
+            var fileSystem = new MockFileSystem(files);
+            Assert.Throws<ConfigurationErrorsException>(() => ScriptHost.DeterminePrimaryScriptFile(functionConfig, @"c:\functions", fileSystem));
         }
 
         [Fact]
         public void DeterminePrimaryScriptFile_NoFiles_ReturnsNull()
         {
-            JObject functionConfig = new JObject();
+            var functionConfig = new JObject();
             string[] functionFiles = new string[0];
-            Assert.Null(ScriptHost.DeterminePrimaryScriptFile(functionConfig, functionFiles));
+            var fileSystem = new MockFileSystem();
+            fileSystem.AddDirectory(@"c:\functions");
+            Assert.Throws<ConfigurationErrorsException>(() => ScriptHost.DeterminePrimaryScriptFile(functionConfig, @"c:\functions", fileSystem));
         }
 
         [Fact]
         public void DeterminePrimaryScriptFile_MultipleFiles_RunFilePresent()
         {
-            JObject functionConfig = new JObject();
-            string[] functionFiles = new string[]
+            var functionConfig = new JObject();
+            var files = new Dictionary<string, MockFileData>
             {
-                @"c:\functions\Run.csx",
-                @"c:\functions\Helper.csx",
-                @"c:\functions\test.txt"
+                { @"c:\functions\Run.csx", new MockFileData(string.Empty) },
+                { @"c:\functions\Helper.csx", new MockFileData(string.Empty) },
+                { @"c:\functions\test.txt", new MockFileData(string.Empty) }
             };
-            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, functionFiles);
+            var fileSystem = new MockFileSystem(files);
+            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, @"c:\functions", fileSystem);
             Assert.Equal(@"c:\functions\Run.csx", scriptFile);
         }
 
         [Fact]
         public void DeterminePrimaryScriptFile_SingleFile()
         {
-            JObject functionConfig = new JObject();
-            string[] functionFiles = new string[]
+            var functionConfig = new JObject();
+            var files = new Dictionary<string, MockFileData>
             {
-                @"c:\functions\Run.csx"
+                { @"c:\functions\Run.csx", new MockFileData(string.Empty) }
             };
-            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, functionFiles);
+            var fileSystem = new MockFileSystem(files);
+            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, @"c:\functions", fileSystem);
             Assert.Equal(@"c:\functions\Run.csx", scriptFile);
         }
 
         [Fact]
         public void DeterminePrimaryScriptFile_MultipleFiles_RunTrumpsIndex()
         {
-            JObject functionConfig = new JObject();
-            string[] functionFiles = new string[]
+            var functionConfig = new JObject();
+            var files = new Dictionary<string, MockFileData>
             {
-                @"c:\functions\run.js",
-                @"c:\functions\index.js",
-                @"c:\functions\test.txt"
+                { @"c:\functions\run.js", new MockFileData(string.Empty) },
+                { @"c:\functions\index.js", new MockFileData(string.Empty) },
+                { @"c:\functions\test.txt", new MockFileData(string.Empty) }
             };
-            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, functionFiles);
+            var fileSystem = new MockFileSystem(files);
+            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, @"c:\functions", fileSystem);
             Assert.Equal(@"c:\functions\run.js", scriptFile);
         }
 
         [Fact]
         public void DeterminePrimaryScriptFile_MultipleFiles_IndexFilePresent()
         {
-            JObject functionConfig = new JObject();
-            string[] functionFiles = new string[]
+            var functionConfig = new JObject();
+            var files = new Dictionary<string, MockFileData>
             {
-                @"c:\functions\index.js",
-                @"c:\functions\test.txt"
+                { @"c:\functions\index.js", new MockFileData(string.Empty) },
+                { @"c:\functions\test.txt", new MockFileData(string.Empty) }
             };
-            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, functionFiles);
+            var fileSystem = new MockFileSystem(files);
+            string scriptFile = ScriptHost.DeterminePrimaryScriptFile(functionConfig, @"c:\functions", fileSystem);
             Assert.Equal(@"c:\functions\index.js", scriptFile);
         }
 
@@ -289,9 +339,11 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
                 RootScriptPath = rootPath
             };
 
+            var environment = new Mock<IScriptHostEnvironment>();
+
             var ex = Assert.Throws<FormatException>(() =>
             {
-                ScriptHost.Create(_settingsManager, scriptConfig);
+                ScriptHost.Create(environment.Object, scriptConfig, _settingsManager);
             });
 
             Assert.Equal(string.Format("Unable to parse {0} file.", ScriptConstants.HostMetadataFileName), ex.Message);
@@ -323,8 +375,8 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
                 {
                     RootScriptPath = rootPath
                 };
-
-                var scriptHost = ScriptHost.Create(_settingsManager, scriptConfig);
+                var environment = new Mock<IScriptHostEnvironment>();
+                var scriptHost = ScriptHost.Create(environment.Object, scriptConfig, _settingsManager);
 
                 Assert.Equal(1, scriptHost.FunctionErrors.Count);
                 Assert.Equal(functionName, scriptHost.FunctionErrors.First().Key);
@@ -387,6 +439,30 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             Assert.Equal(3, scriptConfig.HostConfig.Queues.MaxDequeueCount);
             Assert.Equal(123, scriptConfig.HostConfig.Queues.NewBatchThreshold);
             Assert.Equal(TimeSpan.FromSeconds(30), scriptConfig.HostConfig.Queues.VisibilityTimeout);
+        }
+
+        [Fact]
+        public void ApplyConfiguration_Blobs()
+        {
+            JObject config = new JObject();
+            config["id"] = ID;
+            JObject blobsConfig = new JObject();
+            config["blobs"] = blobsConfig;
+
+            ScriptHostConfiguration scriptConfig = new ScriptHostConfiguration();
+            TraceWriter traceWriter = new TestTraceWriter(TraceLevel.Verbose);
+
+            WebJobsCoreScriptBindingProvider provider = new WebJobsCoreScriptBindingProvider(scriptConfig.HostConfig, config, new TestTraceWriter(TraceLevel.Verbose));
+            provider.Initialize();
+
+            Assert.True(scriptConfig.HostConfig.Blobs.CentralizedPoisonQueue);
+
+            blobsConfig["centralizedPoisonQueue"] = false;
+
+            provider = new WebJobsCoreScriptBindingProvider(scriptConfig.HostConfig, config, new TestTraceWriter(TraceLevel.Verbose));
+            provider.Initialize();
+
+            Assert.False(scriptConfig.HostConfig.Blobs.CentralizedPoisonQueue);
         }
 
         [Fact]
@@ -771,16 +847,21 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             }));
             var mappedHttpFunctions = new Dictionary<string, HttpTriggerBindingMetadata>();
             var traceWriter = new TestTraceWriter(TraceLevel.Verbose);
-            var functionFilesProvider = new Lazy<string[]>(() => new string[] { "run.csx" });
             FunctionMetadata functionMetadata = null;
             string functionError = null;
-            bool result = ScriptHost.TryParseFunctionMetadata("test", functionConfig, mappedHttpFunctions, traceWriter, functionFilesProvider, out functionMetadata, out functionError);
+            var fileSystem = new MockFileSystem();
+            fileSystem.AddFile(@"c:\functions\test\run.csx", new MockFileData(string.Empty));
+            fileSystem.AddFile(@"c:\functions\test2\run.csx", new MockFileData(string.Empty));
+            fileSystem.AddFile(@"c:\functions\test3\run.csx", new MockFileData(string.Empty));
+            fileSystem.AddFile(@"c:\functions\test4\run.csx", new MockFileData(string.Empty));
+            fileSystem.AddFile(@"c:\functions\test5\run.csx", new MockFileData(string.Empty));
+            bool result = ScriptHost.TryParseFunctionMetadata("test", functionConfig, mappedHttpFunctions, traceWriter, @"c:\functions\test", ScriptSettingsManager.Instance, out functionMetadata, out functionError, fileSystem);
             Assert.True(result);
             Assert.NotNull(functionMetadata);
             Assert.Null(functionError);
             Assert.Equal(1, mappedHttpFunctions.Count);
             Assert.True(mappedHttpFunctions.ContainsKey("test"));
-            Assert.Equal("run.csx", functionMetadata.ScriptFile);
+            Assert.Equal(@"c:\functions\test\run.csx", functionMetadata.ScriptFile);
 
             // add another for a completely different route
             functionConfig["bindings"] = new JArray(new JObject
@@ -793,7 +874,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             });
             functionMetadata = null;
             functionError = null;
-            result = ScriptHost.TryParseFunctionMetadata("test2", functionConfig, mappedHttpFunctions, traceWriter, functionFilesProvider, out functionMetadata, out functionError);
+            result = ScriptHost.TryParseFunctionMetadata("test2", functionConfig, mappedHttpFunctions, traceWriter, @"c:\functions\test2", ScriptSettingsManager.Instance, out functionMetadata, out functionError, fileSystem);
             Assert.True(result);
             Assert.NotNull(functionMetadata);
             Assert.Null(functionError);
@@ -811,7 +892,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             });
             functionMetadata = null;
             functionError = null;
-            result = ScriptHost.TryParseFunctionMetadata("test3", functionConfig, mappedHttpFunctions, traceWriter, functionFilesProvider, out functionMetadata, out functionError);
+            result = ScriptHost.TryParseFunctionMetadata("test3", functionConfig, mappedHttpFunctions, traceWriter, @"c:\functions\test3", ScriptSettingsManager.Instance, out functionMetadata, out functionError, fileSystem);
             Assert.True(result);
             Assert.NotNull(functionMetadata);
             Assert.Null(functionError);
@@ -829,7 +910,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             });
             functionMetadata = null;
             functionError = null;
-            result = ScriptHost.TryParseFunctionMetadata("test4", functionConfig, mappedHttpFunctions, traceWriter, functionFilesProvider, out functionMetadata, out functionError);
+            result = ScriptHost.TryParseFunctionMetadata("test4", functionConfig, mappedHttpFunctions, traceWriter, @"c:\functions\test4", ScriptSettingsManager.Instance, out functionMetadata, out functionError, fileSystem);
             Assert.False(result);
             Assert.NotNull(functionMetadata);
             Assert.True(functionError.StartsWith("The route specified conflicts with the route defined by function"));
@@ -845,7 +926,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             });
             functionMetadata = null;
             functionError = null;
-            result = ScriptHost.TryParseFunctionMetadata("test5", functionConfig, mappedHttpFunctions, traceWriter, functionFilesProvider, out functionMetadata, out functionError);
+            result = ScriptHost.TryParseFunctionMetadata("test5", functionConfig, mappedHttpFunctions, traceWriter, @"c:\functions\test5", ScriptSettingsManager.Instance, out functionMetadata, out functionError, fileSystem);
             Assert.False(result);
             Assert.NotNull(functionMetadata);
             Assert.Equal(3, mappedHttpFunctions.Count);
@@ -862,14 +943,12 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
 
         public class TestFixture
         {
-            private readonly ScriptSettingsManager _settingsManager;
-
             public TestFixture()
             {
                 ScriptHostConfiguration config = new ScriptHostConfiguration();
                 config.HostConfig.HostId = ID;
-                _settingsManager = ScriptSettingsManager.Instance;
-                Host = ScriptHost.Create(_settingsManager, config);
+                var environment = new Mock<IScriptHostEnvironment>();
+                Host = ScriptHost.Create(environment.Object, config);
             }
 
             public ScriptHost Host { get; private set; }

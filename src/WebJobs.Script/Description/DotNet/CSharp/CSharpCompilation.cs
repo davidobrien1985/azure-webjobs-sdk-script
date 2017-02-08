@@ -26,7 +26,7 @@ namespace Microsoft.Azure.WebJobs.Script.Description
 
         // Simply getting the built in analyzers for now.
         // This should eventually be enhanced to dynamically discover/load analyzers.
-        private static ImmutableArray<DiagnosticAnalyzer> _analyzers = ImmutableArray.Create<DiagnosticAnalyzer>(new InvalidFileMetadataReferenceAnalyzer());
+        private static ImmutableArray<DiagnosticAnalyzer> _analyzers = ImmutableArray.Create<DiagnosticAnalyzer>(new InvalidFileMetadataReferenceAnalyzer(), new AsyncVoidAnalyzer());
 
         public CSharpCompilation(Compilation compilation)
         {
@@ -96,7 +96,14 @@ namespace Microsoft.Azure.WebJobs.Script.Description
                 {
                     var compilationWithAnalyzers = _compilation.WithAnalyzers(GetAnalyzers());
                     var diagnostics = compilationWithAnalyzers.GetAnalyzerDiagnosticsAsync().Result;
-                    var emitResult = compilationWithAnalyzers.Compilation.Emit(assemblyStream, pdbStream, cancellationToken: cancellationToken);
+                    var emitOptions = new EmitOptions().WithDebugInformationFormat(
+#if WINDOWS
+                        DebugInformationFormat.Pdb
+#else
+                        DebugInformationFormat.PortablePdb
+#endif
+                    );
+                    var emitResult = compilationWithAnalyzers.Compilation.Emit(assemblyStream, pdbStream, options: emitOptions, cancellationToken: cancellationToken);
 
                     diagnostics = diagnostics.AddRange(emitResult.Diagnostics);
 

@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using Microsoft.Azure.WebJobs.Host;
 using Microsoft.Azure.WebJobs.Script.Config;
 using Microsoft.Azure.WebJobs.Script.Description;
+using Moq;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -142,7 +143,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
                 new PowerShellFunctionDescriptorProvider(scriptHostInfo.Host, scriptHostInfo.Configuration)
             };
 
-            var functionDescriptors = scriptHostInfo.Host.ReadFunctions(functions, descriptorProviders);
+            var functionDescriptors = scriptHostInfo.Host.GetFunctionDescriptors(functions, descriptorProviders);
             Type t = FunctionGenerator.Generate("TestScriptHost", "Host.Functions", null, functionDescriptors);
 
             MethodInfo method = t.GetMethods(BindingFlags.Public | BindingFlags.Static).First();
@@ -151,12 +152,13 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
 
         private static ScriptHostInfo GetScriptHostInfo()
         {
+            var environment = new Mock<IScriptHostEnvironment>();
             string rootPath = Path.Combine(Environment.CurrentDirectory, @"TestScripts\PowerShell");
             ScriptHostConfiguration scriptConfig = new ScriptHostConfiguration()
             {
                 RootScriptPath = rootPath
             };
-            var host = ScriptHost.Create(SettingsManager, scriptConfig);
+            var host = ScriptHost.Create(environment.Object, scriptConfig, SettingsManager);
             return new ScriptHostInfo(host, scriptConfig, rootPath);
         }
     }

@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -12,6 +13,7 @@ using System.Threading.Tasks;
 using Microsoft.Azure.WebJobs.Host;
 using Microsoft.Azure.WebJobs.Script.Config;
 using Microsoft.Azure.WebJobs.Script.Diagnostics;
+using Microsoft.Azure.WebJobs.Script.IO;
 
 namespace Microsoft.Azure.WebJobs.Script
 {
@@ -19,10 +21,11 @@ namespace Microsoft.Azure.WebJobs.Script
     /// Class encapsulating a <see cref="ScriptHost"/> an keeping a singleton
     /// instance always alive, restarting as necessary.
     /// </summary>
-    public class ScriptHostManager : IDisposable
+    public class ScriptHostManager : IScriptHostEnvironment, IDisposable
     {
         private readonly ScriptHostConfiguration _config;
         private readonly IScriptHostFactory _scriptHostFactory;
+        private readonly IScriptHostEnvironment _environment;
         private ScriptHost _currentInstance;
 
         // ScriptHosts are not thread safe, so be clear that only 1 thread at a time operates on each instance. 
@@ -34,17 +37,26 @@ namespace Microsoft.Azure.WebJobs.Script
         private bool _disposed;
         private bool _stopped;
         private AutoResetEvent _stopEvent = new AutoResetEvent(false);
+        private AutoResetEvent _restartHostEvent = new AutoResetEvent(false);
         private TraceWriter _traceWriter;
 
         private ScriptSettingsManager _settingsManager;
+        private AutoRecoveringFileSystemWatcher _scriptFileWatcher;
+        private CancellationTokenSource _restartDelayTokenSource;
 
-        public ScriptHostManager(ScriptHostConfiguration config)
-            : this(config, ScriptSettingsManager.Instance, new ScriptHostFactory())
+        public ScriptHostManager(ScriptHostConfiguration config, IScriptHostEnvironment environment = null)
+            : this(config, ScriptSettingsManager.Instance, new ScriptHostFactory(), environment)
         {
+            if (config.FileWatchingEnabled)
+            {
+                _scriptFileWatcher = new AutoRecoveringFileSystemWatcher(config.RootScriptPath);
+                _scriptFileWatcher.Changed += OnScriptFileChanged;
+            }
         }
 
-        public ScriptHostManager(ScriptHostConfiguration config, ScriptSettingsManager settingsManager, IScriptHostFactory scriptHostFactory)
+        public ScriptHostManager(ScriptHostConfiguration config, ScriptSettingsManager settingsManager, IScriptHostFactory scriptHostFactory, IScriptHostEnvironment environment = null)
         {
+            _environment = environment ?? this;
             _config = config;
             _settingsManager = settingsManager;
             _scriptHostFactory = scriptHostFactory;
@@ -83,8 +95,7 @@ namespace Microsoft.Azure.WebJobs.Script
 
         public void RunAndBlock(CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Start the host and restart it if requested. Host Restarts will happen when
-            // host level configuration files change
+            int consecutiveErrorCount = 0;
             do
             {
                 ScriptHost newInstance = null;
@@ -103,7 +114,7 @@ namespace Microsoft.Azure.WebJobs.Script
                         HostId = _config.HostConfig.HostId
                     };
                     OnInitializeConfig(_config);
-                    newInstance = _scriptHostFactory.Create(_settingsManager, _config);
+                    newInstance = _scriptHostFactory.Create(_environment, _settingsManager, _config);
                     _traceWriter = newInstance.TraceWriter;
 
                     _currentInstance = newInstance;
@@ -116,8 +127,8 @@ namespace Microsoft.Azure.WebJobs.Script
 
                     if (_traceWriter != null)
                     {
-                        string message = string.Format("Starting Host (HostId={0}, Version={1}, ProcessId={2}, Debug={3})",
-                            newInstance.ScriptConfig.HostConfig.HostId, ScriptHost.Version, Process.GetCurrentProcess().Id, newInstance.InDebugMode.ToString());
+                        string message = string.Format("Starting Host (HostId={0}, Version={1}, ProcessId={2}, Debug={3}, Attempt={4})",
+                            newInstance.ScriptConfig.HostConfig.HostId, ScriptHost.Version, Process.GetCurrentProcess().Id, newInstance.InDebugMode.ToString(), consecutiveErrorCount);
                         _traceWriter.Info(message);
                     }
                     newInstance.StartAsync(cancellationToken).GetAwaiter().GetResult();
@@ -131,6 +142,8 @@ namespace Microsoft.Azure.WebJobs.Script
                     // state to Running
                     State = ScriptHostState.Running;
                     LastError = null;
+                    consecutiveErrorCount = 0;
+                    _restartDelayTokenSource = null;
 
                     // Wait for a restart signal. This event will automatically reset.
                     // While we're restarting, it is possible for another restart to be
@@ -140,19 +153,22 @@ namespace Microsoft.Azure.WebJobs.Script
                     WaitHandle.WaitAny(new WaitHandle[]
                     {
                         cancellationToken.WaitHandle,
-                        newInstance.RestartEvent,
+                        _restartHostEvent,
                         _stopEvent
                     });
 
                     // Orphan the current host instance. We're stopping it, so it won't listen for any new functions
                     // it will finish any currently executing functions and then clean itself up.
                     // Spin around and create a new host instance.
-                    Task taskIgnore = Orphan(newInstance);
+#pragma warning disable 4014
+                    Orphan(newInstance);
+#pragma warning restore 4014
                 }
                 catch (Exception ex)
                 {
                     State = ScriptHostState.Error;
                     LastError = ex;
+                    consecutiveErrorCount++;
 
                     // We need to keep the host running, so we catch and log any errors
                     // then restart the host
@@ -175,13 +191,20 @@ namespace Microsoft.Azure.WebJobs.Script
                             }, TaskContinuationOptions.ExecuteSynchronously);
                     }
 
-                    // Wait for a short period of time before restarting to
-                    // avoid cases where a host level config error might cause
-                    // a rapid restart cycle
-                    Task.Delay(_config.RestartInterval).GetAwaiter().GetResult();
+                    // attempt restarts using an exponential backoff strategy
+                    CreateRestartBackoffDelay(consecutiveErrorCount).GetAwaiter().GetResult();
                 }
             }
             while (!_stopped && !cancellationToken.IsCancellationRequested);
+        }
+
+        private Task CreateRestartBackoffDelay(int consecutiveErrorCount)
+        {
+            _restartDelayTokenSource = new CancellationTokenSource();
+
+            return Utility.DelayWithBackoffAsync(consecutiveErrorCount, _restartDelayTokenSource.Token,
+                min: TimeSpan.FromSeconds(1),
+                max: TimeSpan.FromMinutes(2));
         }
 
         private static void LogErrors(ScriptHost host)
@@ -229,6 +252,19 @@ namespace Microsoft.Azure.WebJobs.Script
             finally
             {
                 instance.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Handler for any file changes under the root script path
+        /// </summary>
+        private void OnScriptFileChanged(object sender, FileSystemEventArgs e)
+        {
+            if (_restartDelayTokenSource != null && !_restartDelayTokenSource.IsCancellationRequested)
+            {
+                // if we're currently awaiting an error/restart delay
+                // cancel that 
+                _restartDelayTokenSource.Cancel();
             }
         }
 
@@ -324,9 +360,24 @@ namespace Microsoft.Azure.WebJobs.Script
                 }
 
                 _stopEvent.Dispose();
+                _restartDelayTokenSource?.Dispose();
+                _scriptFileWatcher?.Dispose();
+                _restartHostEvent.Dispose();
 
                 _disposed = true;
             }
+        }
+
+        public virtual void RestartHost()
+        {
+            _restartHostEvent.Set();
+        }
+
+        public virtual void Shutdown()
+        {
+            Stop();
+
+            Process.GetCurrentProcess().Close();
         }
     }
 }

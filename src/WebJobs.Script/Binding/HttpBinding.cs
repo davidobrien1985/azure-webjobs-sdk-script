@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Dynamic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -57,8 +58,8 @@ namespace Microsoft.Azure.WebJobs.Script.Binding
             {
                 try
                 {
-                    // attempt to read the content as json
-                    content = JObject.Parse(stringContent);
+                    // attempt to read the content as JObject/JArray
+                    content = JsonConvert.DeserializeObject(stringContent);
                 }
                 catch (JsonException)
                 {
@@ -121,12 +122,10 @@ namespace Microsoft.Azure.WebJobs.Script.Binding
                     headers = headersValue;
                 }
 
-                object statusValue;
-                if ((responseObject.TryGetValue("statusCode", out statusValue, ignoreCase: true) ||
-                     responseObject.TryGetValue("status", out statusValue, ignoreCase: true)) &&
-                     (statusValue is int || statusValue is string))
+                HttpStatusCode responseStatusCode;
+                if (TryParseStatusCode(responseObject, out responseStatusCode))
                 {
-                    statusCode = (HttpStatusCode)Convert.ToInt32(statusValue);
+                    statusCode = responseStatusCode;
                 }
 
                 bool isRawValue;
@@ -137,11 +136,50 @@ namespace Microsoft.Azure.WebJobs.Script.Binding
             }
         }
 
+        internal static bool TryParseStatusCode(IDictionary<string, object> responseObject, out HttpStatusCode statusCode)
+        {
+            statusCode = HttpStatusCode.OK;
+            object statusValue;
+
+            if (!responseObject.TryGetValue("statusCode", out statusValue, ignoreCase: true) &&
+                !responseObject.TryGetValue("status", out statusValue, ignoreCase: true))
+            {
+                return false;
+            }
+
+            if (statusValue is HttpStatusCode ||
+                statusValue is int)
+            {
+                statusCode = (HttpStatusCode)statusValue;
+                return true;
+            }
+
+            if (statusValue is uint ||
+                statusValue is short ||
+                statusValue is ushort ||
+                statusValue is long ||
+                statusValue is ulong)
+            {
+                statusCode = (HttpStatusCode)Convert.ToInt32(statusValue);
+                return true;
+            }
+
+            var stringValue = statusValue as string;
+            int parsedStatusCode;
+            if (stringValue != null && int.TryParse(stringValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsedStatusCode))
+            {
+                statusCode = (HttpStatusCode)parsedStatusCode;
+                return true;
+            }
+
+            return false;
+        }
+
         private static HttpResponseMessage CreateResponse(HttpRequestMessage request, HttpStatusCode statusCode, object content, IDictionary<string, object> headers, bool isRawResponse)
         {
             if (isRawResponse)
             {
-                // We only write the response through one of the formatters if 
+                // We only write the response through one of the formatters if
                 // the function hasn't indicated that it wants to write the raw response
                 return new HttpResponseMessage(statusCode) { Content = CreateResultContent(content) };
             }
@@ -264,7 +302,11 @@ namespace Microsoft.Azure.WebJobs.Script.Binding
                         }
                         break;
                     case "content-disposition":
-                        response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue(header.Value.ToString());
+                        ContentDispositionHeaderValue contentDisposition = null;
+                        if (ContentDispositionHeaderValue.TryParse(header.Value.ToString(), out contentDisposition))
+                        {
+                            response.Content.Headers.ContentDisposition = contentDisposition;
+                        }
                         break;
                     case "content-encoding":
                     case "content-language":

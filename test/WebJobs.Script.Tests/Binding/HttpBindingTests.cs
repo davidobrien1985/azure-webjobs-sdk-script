@@ -42,6 +42,19 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
         }
 
         [Fact]
+        public void AddResponseHeader_ContentDisposition_AddsExpectedHeader()
+        {
+            HttpResponseMessage response = new HttpResponseMessage()
+            {
+                Content = new StringContent("Test")
+            };
+            var cd = "attachment; filename=\"test.txt\"";
+            var header = new KeyValuePair<string, object>("content-disposition", cd);
+            HttpBinding.AddResponseHeader(response, header);
+            Assert.Equal(cd, response.Content.Headers.ContentDisposition.ToString());
+        }
+
+        [Fact]
         public void ParseResponseObject_ReturnsExpectedResult()
         {
             IDictionary<string, object> inputHeaders = new Dictionary<string, object>()
@@ -211,6 +224,37 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             resultJson = await response.Content.ReadAsStringAsync();
             Assert.Equal(expectedBodyJson, resultJson);
             Assert.Equal("application/json", response.Content.Headers.ContentType.MediaType);
+        }
+
+        [Theory]
+        [InlineData("status", (short)301, HttpStatusCode.MovedPermanently, true)]
+        [InlineData("status", (ushort)401, HttpStatusCode.Unauthorized, true)]
+        [InlineData("status", (int)501, HttpStatusCode.NotImplemented, true)]
+        [InlineData("status", (uint)202, HttpStatusCode.Accepted, true)]
+        [InlineData("status", (long)302, HttpStatusCode.Redirect, true)]
+        [InlineData("status", (ulong)402, HttpStatusCode.PaymentRequired, true)]
+        [InlineData("status", HttpStatusCode.Conflict, HttpStatusCode.Conflict, true)]
+        [InlineData("statusCode", (int)202, HttpStatusCode.Accepted, true)]
+        [InlineData("statusCode", "202", HttpStatusCode.Accepted, true)]
+        [InlineData("statusCode", "invalid", HttpStatusCode.Accepted, false)]
+        [InlineData("statusCode", "", HttpStatusCode.Accepted, false)]
+        [InlineData("statusCode", null, HttpStatusCode.Accepted, false)]
+        [InlineData("code", (int)202, HttpStatusCode.Accepted, false)]
+        public void TryParseStatusCode_ReturnsExpectedResult(string propertyName, object value, HttpStatusCode expectedStatusCode, bool expectedReturn)
+        {
+            var responseObject = new Dictionary<string, object>
+            {
+                { propertyName, value }
+            };
+
+            HttpStatusCode statusCode;
+            bool returnValue = HttpBinding.TryParseStatusCode(responseObject, out statusCode);
+
+            Assert.Equal(expectedReturn, returnValue);
+            if (expectedReturn)
+            {
+                Assert.Equal(expectedStatusCode, statusCode);
+            }
         }
     }
 }

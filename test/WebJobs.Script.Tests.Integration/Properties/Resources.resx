@@ -149,23 +149,23 @@
 }</value>
   </data>
   <data name="DotNetFunctionJson" xml:space="preserve">
-    <value>{
-    "scriptFile":"DotNetFunctionAssembly.dll",
+    <value>{{
+    "scriptFile":"{0}",
     "entryPoint": "TestFunction.Function.Run",
     "bindings": [
-        {
+        {{
             "type": "httpTrigger",
             "name": "req",
             "direction": "in",
             "methods": [ "get" ]
-        },
-        {
+        }},
+        {{
             "type": "http",
             "name": "$return",
             "direction": "out"
-        }
+        }}
     ]
-}</value>
+}}</value>
   </data>
   <data name="DotNetFunctionSource" xml:space="preserve">
     <value>using System.Net;
@@ -187,6 +187,16 @@ namespace TestFunction
             };
 
             return Task.FromResult(res);
+        }
+
+        public string OtherMethod()
+        {
+            return "Hello";
+        }
+
+        private string PrivateMethod()
+        {
+            return "Hello";
         }
     }
 }</value>

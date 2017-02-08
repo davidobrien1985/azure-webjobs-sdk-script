@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Web.Http.Controllers;
 using System.Web.Http.Filters;
 
@@ -20,9 +22,9 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Filters
             Level = level;
         }
 
-        public AuthorizationLevel Level { get; private set; }
+        public AuthorizationLevel Level { get; }
 
-        public override void OnAuthorization(HttpActionContext actionContext)
+        public async override Task OnAuthorizationAsync(HttpActionContext actionContext, CancellationToken cancellationToken)
         {
             if (actionContext == null)
             {
@@ -30,29 +32,30 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Filters
             }
 
             ISecretManager secretManager = actionContext.ControllerContext.Configuration.DependencyResolver.GetService<ISecretManager>();
+            var settings = actionContext.ControllerContext.Configuration.DependencyResolver.GetService<WebHostSettings>();
 
-            if (!IsAuthorized(actionContext.Request, Level, secretManager))
+            if (!settings.IsAuthDisabled && !await IsAuthorizedAsync(actionContext.Request, Level, secretManager))
             {
                 actionContext.Response = new HttpResponseMessage(HttpStatusCode.Unauthorized);
             }
         }
 
-        public static bool IsAuthorized(HttpRequestMessage request, AuthorizationLevel level, ISecretManager secretManager, string functionName = null)
+        public static async Task<bool> IsAuthorizedAsync(HttpRequestMessage request, AuthorizationLevel level, ISecretManager secretManager, string functionName = null)
         {
             if (level == AuthorizationLevel.Anonymous)
             {
                 return true;
             }
 
-            AuthorizationLevel requestLevel = GetAuthorizationLevel(request, secretManager, functionName);
+            AuthorizationLevel requestLevel = await GetAuthorizationLevelAsync(request, secretManager, functionName);
             return requestLevel >= level;
         }
 
-        internal static AuthorizationLevel GetAuthorizationLevel(HttpRequestMessage request, ISecretManager secretManager, string functionName = null)
+        internal static async Task<AuthorizationLevel> GetAuthorizationLevelAsync(HttpRequestMessage request, ISecretManager secretManager, string functionName = null)
         {
             // TODO: Add support for validating "EasyAuth" headers
 
-            // first see if a key value is specified via headers or query string (header takes precidence)
+            // first see if a key value is specified via headers or query string (header takes precedence)
             IEnumerable<string> values;
             string keyValue = null;
             if (request.Headers.TryGetValues(FunctionsKeyHeaderName, out values))
@@ -61,14 +64,14 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Filters
             }
             else
             {
-                var queryParameters = request.GetQueryNameValuePairs().ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
+                var queryParameters = request.GetQueryParameterDictionary();
                 queryParameters.TryGetValue("code", out keyValue);
             }
 
             if (!string.IsNullOrEmpty(keyValue))
             {
                 // see if the key specified is the master key
-                HostSecretsInfo hostSecrets = secretManager.GetHostSecrets();
+                HostSecretsInfo hostSecrets = await secretManager.GetHostSecretsAsync().ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(hostSecrets.MasterKey) &&
                     Key.SecretValueEquals(keyValue, hostSecrets.MasterKey))
                 {
@@ -85,7 +88,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Filters
                 // if there is a function specific key specified try to match against that
                 if (functionName != null)
                 {
-                    IDictionary<string, string> functionSecrets = secretManager.GetFunctionSecrets(functionName);
+                    IDictionary<string, string> functionSecrets = secretManager.GetFunctionSecretsAsync(functionName).GetAwaiter().GetResult();
                     if (functionSecrets != null &&
                         functionSecrets.Values.Any(s => Key.SecretValueEquals(keyValue, s)))
                     {

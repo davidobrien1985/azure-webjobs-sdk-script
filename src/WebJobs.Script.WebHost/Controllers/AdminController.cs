@@ -3,6 +3,7 @@
 
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -24,10 +25,12 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Controllers
     public class AdminController : ApiController
     {
         private readonly WebScriptHostManager _scriptHostManager;
+        private readonly WebHostSettings _webHostSettings;
 
-        public AdminController(WebScriptHostManager scriptHostManager)
+        public AdminController(WebScriptHostManager scriptHostManager, WebHostSettings webHostSettings)
         {
             _scriptHostManager = scriptHostManager;
+            _webHostSettings = webHostSettings;
         }
 
         [HttpPost]
@@ -98,6 +101,25 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Controllers
             }
 
             return status;
+        }
+
+        [HttpPost]
+        [Route("admin/host/debug")]
+        public HttpResponseMessage LaunchDebugger()
+        {
+            if (_webHostSettings.IsSelfHost)
+            {
+                // If debugger is already running, this will be a no-op returning true.
+                if (Debugger.Launch())
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK);
+                }
+                else
+                {
+                    return new HttpResponseMessage(HttpStatusCode.Conflict);
+                }
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotImplemented);
         }
 
         public override Task<HttpResponseMessage> ExecuteAsync(HttpControllerContext controllerContext, CancellationToken cancellationToken)
